@@ -1,9 +1,10 @@
-#List
+# List
+
 * **一、什么是Activity**
 * **1.1 LayoutInflater.Factory2**
 * **1.2 ContextThemeWrapper**
 
-##一、什么是Activity
+## 一、什么是Activity
 
 ```
 /core/java/android/app/Activity.java
@@ -37,7 +38,7 @@ public class Activity extends ContextThemeWrapper
         Window.OnWindowDismissedCallback, WindowControllerCallback
 ```
 
-###1.1 LayoutInflater.Factory2
+### 1.1 LayoutInflater.Factory2
 
 其实看到LayoutInflater，和我们平时在写view时，xml转换为view其实是一样的，它的本质还是基于一个反射机制；
 
@@ -280,7 +281,7 @@ public class Activity extends ContextThemeWrapper
     }
     ...
 ```
-###1.2 ContextThemeWrapper
+### 1.2 ContextThemeWrapper
 
 
 
