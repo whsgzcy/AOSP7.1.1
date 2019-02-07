@@ -1,11 +1,13 @@
 # List
 
-* **一、什么是Activity**
+* **一、Activity**
 * **1.1 LayoutInflater.Factory2**
 * **1.2 ContextThemeWrapper**
 * **1.3 ComponentCallbacks2**
 
-## 一、什么是Activity
+* **二、BroadcastReceiver**
+
+## 一、Activity
 
 ```
 /core/java/android/app/Activity.java
@@ -435,11 +437,27 @@ core/java/android/content/ComponentCallbacks2.java
     void onTrimMemory(int level);
 ```
 
+## 二、BroadcastReceiver
+
+广播，其实也是一种消息传递机制，Intent其实本质是一个序列化的对象，消息的载体:
+
+```
+/core/java/android/content/Intent.java
+```
+
+他可以在进程内通信，也可以在进程间通信，千万不能过于频繁，能不用广播就不用广播；
+
+现在问题来了，
+
+
+
 
 
 问题1：
 
 问题2：
+
+startService和bindService
 
 
 参考：
