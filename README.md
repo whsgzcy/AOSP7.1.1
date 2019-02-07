@@ -451,6 +451,19 @@ core/java/android/content/ComponentCallbacks2.java
 
 ![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/broadcast.jpg)
 
+XXXActivity为注册广播和发送广播；
+
+```
+core/java/android/app/LoadedApk.java
+```
+
+```
+core/java/android/app/ActivityThread.java
+```
+```
+services/core/java/com/android/server/am/ActivityManagerService.java
+```
+
 
 问题2：
 
