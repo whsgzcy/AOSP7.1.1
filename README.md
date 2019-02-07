@@ -447,13 +447,10 @@ core/java/android/content/ComponentCallbacks2.java
 
 他可以在进程内通信，也可以在进程间通信，千万不能过于频繁，能不用广播就不用广播；
 
-现在问题来了，
+对于广播，他到底是怎么把数据传过去的？**问题1答案**
 
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/broadcast.jpg)
 
-
-
-
-问题1：
 
 问题2：
 
