@@ -3,6 +3,7 @@
 * **一、什么是Activity**
 * **1.1 LayoutInflater.Factory2**
 * **1.2 ContextThemeWrapper**
+* **1.3 ComponentCallbacks2**
 
 ## 一、什么是Activity
 
@@ -29,6 +30,7 @@
 
 * LayoutInflater.Factory2
 * ContextThemeWrapper
+* ComponentCallbacks2
 
 ```
 public class Activity extends ContextThemeWrapper
@@ -281,10 +283,167 @@ public class Activity extends ContextThemeWrapper
     }
     ...
 ```
+
 ### 1.2 ContextThemeWrapper
 
+从注解上来看，是允许或者修改context所包含的主题，从用法上来看，他是从style中拿属性填充view，也就是我们把style封装成xml的形式给外部使用，但是其解释为“... allows you to modify or replace the theme of the wrapped context.” 这个context所包含的，那么这个context是什么呢？
+
+```
+/core/java/android/view/ContextThemeWrapper.java
+
+/**
+ * A context wrapper that allows you to modify or replace the theme of the
+ * wrapped context.
+ */
+public class ContextThemeWrapper extends ContextWrapper {
+    private int mThemeResource;
+    private Resources.Theme mTheme;
+    private LayoutInflater mInflater;
+    private Configuration mOverrideConfiguration;
+    private Resources mResources;
+    ...
+```
+
+阅读ContextWrapper.java的代码，有很多context常见的方法，比如“sendBroadcast ...”等，从代码注释中也可以看出，他是一个简单的代理，可以对其子类进行修改；
+
+**问题1 这里引入一个问题，context.sendBroadCast(xxx)，发送就会有遍历，遍历就可能会有匹配，接收，那么他是怎么发送，怎么接收？**
+
+```
+/core/java/android/content/ContextWrapper.java
+
+/**
+ * Proxying implementation of Context that simply delegates all of its calls to
+ * another Context.  Can be subclassed to modify behavior without changing
+ * the original Context.
+ */
+public class ContextWrapper extends Context {
+    Context mBase;
+    ...
+```
+有关应用程序环境的全局信息的接口。 这是一个抽象类，其实现由Android系统提供。 它允许访问特定于应用程序的资源和类，以及对应用程序级操作的上调，例如启动活动，广播和接收意图等；
+
+在Activity中可以调用this.sendBroadCastXXX,所以Activity的本质是一个context，也就是上述“ ... the wrapped context.” 这个context所包含的，context是一个App的主线！
+
+```
+/core/java/android/content/Context.java
+
+/**
+ * Interface to global information about an application environment.  This is
+ * an abstract class whose implementation is provided by
+ * the Android system.  It
+ * allows access to application-specific resources and classes, as well as
+ * up-calls for application-level operations such as launching activities,
+ * broadcasting and receiving intents, etc.
+ */
+public abstract class Context {
+    /**
+     * File creation mode: the default mode, where the created file can only
+     * be accessed by the calling application (or all applications sharing the
+     * same user ID).
+     */
+    public static final int MODE_PRIVATE = 0x0000;
+    ...
+```
+
+### 1.3 ComponentCallbacks2
+
+[点击](https://blog.csdn.net/time_hunter/article/details/53107191)
+
+**问题2 我们都知道Android是Linux裁剪之后的产物，例如：1、Exception，他的是实质就是判断指针的类型，若指针为null则jni返回给java的即是null，outOfArray等为.size的判断；2、Log，我们通过adb都可以从buffer中读到日志，他的实质也是Linux所特有，只是通过jni返回上去，那么我们在使用360等内存优化软件时，从application至少可以读取到内存和cpu等，那么他是不是也是Linux中top 通过jni返回上去的呢？在哪进行的调用？**
+
+```
+core/java/android/content/ComponentCallbacks2.java
+
+/**
+     * Level for {@link #onTrimMemory(int)}: the process is nearing the end
+     * of the background LRU list, and if more memory isn't found soon it will
+     * be killed.
+     */
+    static final int TRIM_MEMORY_COMPLETE = 80;
+    
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process is around the middle
+     * of the background LRU list; freeing memory can help the system keep
+     * other processes running later in the list for better overall performance.
+     */
+    static final int TRIM_MEMORY_MODERATE = 60;
+    
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process has gone on to the
+     * LRU list.  This is a good opportunity to clean up resources that can
+     * efficiently and quickly be re-built if the user returns to the app.
+     */
+    static final int TRIM_MEMORY_BACKGROUND = 40;
+    
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process had been showing
+     * a user interface, and is no longer doing so.  Large allocations with
+     * the UI should be released at this point to allow memory to be better
+     * managed.
+     */
+    static final int TRIM_MEMORY_UI_HIDDEN = 20;
+
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process is not an expendable
+     * background process, but the device is running extremely low on memory
+     * and is about to not be able to keep any background processes running.
+     * Your running process should free up as many non-critical resources as it
+     * can to allow that memory to be used elsewhere.  The next thing that
+     * will happen after this is {@link #onLowMemory()} called to report that
+     * nothing at all can be kept in the background, a situation that can start
+     * to notably impact the user.
+     */
+    static final int TRIM_MEMORY_RUNNING_CRITICAL = 15;
+
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process is not an expendable
+     * background process, but the device is running low on memory.
+     * Your running process should free up unneeded resources to allow that
+     * memory to be used elsewhere.
+     */
+    static final int TRIM_MEMORY_RUNNING_LOW = 10;
+
+
+    /**
+     * Level for {@link #onTrimMemory(int)}: the process is not an expendable
+     * background process, but the device is running moderately low on memory.
+     * Your running process may want to release some unneeded resources for
+     * use elsewhere.
+     */
+    static final int TRIM_MEMORY_RUNNING_MODERATE = 5;
+
+    /**
+     * Called when the operating system has determined that it is a good
+     * time for a process to trim unneeded memory from its process.  This will
+     * happen for example when it goes in the background and there is not enough
+     * memory to keep as many background processes running as desired.  You
+     * should never compare to exact values of the level, since new intermediate
+     * values may be added -- you will typically want to compare if the value
+     * is greater or equal to a level you are interested in.
+     *
+     * <p>To retrieve the processes current trim level at any point, you can
+     * use {@link android.app.ActivityManager#getMyMemoryState
+     * ActivityManager.getMyMemoryState(RunningAppProcessInfo)}.
+     *
+     * @param level The context of the trim, giving a hint of the amount of
+     * trimming the application may like to perform.  May be
+     * {@link #TRIM_MEMORY_COMPLETE}, {@link #TRIM_MEMORY_MODERATE},
+     * {@link #TRIM_MEMORY_BACKGROUND}, {@link #TRIM_MEMORY_UI_HIDDEN},
+     * {@link #TRIM_MEMORY_RUNNING_CRITICAL}, {@link #TRIM_MEMORY_RUNNING_LOW},
+     * or {@link #TRIM_MEMORY_RUNNING_MODERATE}.
+     */
+    void onTrimMemory(int level);
+```
+
+
+
+问题1：
+
+问题2：
 
 
 参考：
 
 https://blog.csdn.net/u013085697/article/details/53898879
+
+https://blog.csdn.net/time_hunter/article/details/53107191
