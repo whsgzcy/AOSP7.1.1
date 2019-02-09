@@ -6,6 +6,7 @@
 * **1.3 ComponentCallbacks2**
 
 * **二、BroadcastReceiver**
+* **三、ContentProvider**
 
 ## 一、Activity
 
@@ -455,19 +456,467 @@ XXXActivity为注册广播和发送广播；
 
 ```
 core/java/android/app/LoadedApk.java
+
+...
+  private final ArrayMap<Context, ArrayMap<BroadcastReceiver, ReceiverDispatcher>> mReceivers
+        = new ArrayMap<Context, ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher>>();
+    private final ArrayMap<Context, ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher>> mUnregisteredReceivers
+        = new ArrayMap<Context, ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher>>();
+    private final ArrayMap<Context, ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher>> mServices
+        = new ArrayMap<Context, ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher>>();
+    private final ArrayMap<Context, ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher>> mUnboundServices
+        = new ArrayMap<Context, ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher>>();
+        ...
+
+public IIntentReceiver getReceiverDispatcher(BroadcastReceiver r,
+            Context context, Handler handler,
+            Instrumentation instrumentation, boolean registered) {
+        synchronized (mReceivers) {
+            LoadedApk.ReceiverDispatcher rd = null;
+            ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher> map = null;
+            if (registered) {
+                map = mReceivers.get(context);
+                if (map != null) {
+                    rd = map.get(r);
+                }
+            }
+            if (rd == null) {
+                rd = new ReceiverDispatcher(r, context, handler,
+                        instrumentation, registered);
+                if (registered) {
+                    if (map == null) {
+                        map = new ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher>();
+                        mReceivers.put(context, map);
+                    }
+                    map.put(r, rd);
+                }
+            } else {
+                rd.validate(context, handler);
+            }
+            rd.mForgotten = false;
+            return rd.getIIntentReceiver();
+        }
+    }
+    ...
+    public void performReceive(Intent intent, int resultCode, String data,
+                Bundle extras, boolean ordered, boolean sticky, int sendingUser) {
+            final Args args = new Args(intent, resultCode, data, extras, ordered,
+                    sticky, sendingUser);
+            if (intent == null) {
+                Log.wtf(TAG, "Null intent received");
+            } else {
+                if (ActivityThread.DEBUG_BROADCAST) {
+                    int seq = intent.getIntExtra("seq", -1);
+                    Slog.i(ActivityThread.TAG, "Enqueueing broadcast " + intent.getAction()
+                            + " seq=" + seq + " to " + mReceiver);
+                }
+            }
+            if (intent == null || !mActivityThread.post(args)) {
+                if (mRegistered && ordered) {
+                    IActivityManager mgr = ActivityManagerNative.getDefault();
+                    if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+                            "Finishing sync broadcast to " + mReceiver);
+                    args.sendFinished(mgr);
+                }
+            }
+        }
+
+    }
+    ...
 ```
 
 ```
 core/java/android/app/ActivityThread.java
+...
+/**
+ * This manages the execution of the main thread in an
+ * application process, scheduling and executing activities,
+ * broadcasts, and other operations on it as the activity
+ * manager requests.
+ *
+ * {@hide}
+ */
+ ...
 ```
+```
+...
+@Override
+    public void sendBroadcast(Intent intent) {
+        mBase.sendBroadcast(intent);
+    }
+    ...
+```
+
 ```
 services/core/java/com/android/server/am/ActivityManagerService.java
+
+...
+/**
+     * Keeps track of all IIntentReceivers that have been registered for broadcasts.
+     * Hash keys are the receiver IBinder, hash value is a ReceiverList.
+     */
+    final HashMap<IBinder, ReceiverList> mRegisteredReceivers = new HashMap<>();
+    
+    /**
+     * Resolver for broadcast intents to registered receivers.
+     * Holds BroadcastFilter (subclass of IntentFilter).
+     */
+    final IntentResolver<BroadcastFilter, BroadcastFilter> mReceiverResolver
+            = new IntentResolver<BroadcastFilter, BroadcastFilter>() {
+        @Override
+        protected boolean allowFilterResult(
+                BroadcastFilter filter, List<BroadcastFilter> dest) {
+            IBinder target = filter.receiverList.receiver.asBinder();
+            for (int i = dest.size() - 1; i >= 0; i--) {
+                if (dest.get(i).receiverList.receiver.asBinder() == target) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        ...
+        
+          public Intent registerReceiver(IApplicationThread caller, String callerPackage,
+            IIntentReceiver receiver, IntentFilter filter, String permission, int userId) {
+        enforceNotIsolatedCaller("registerReceiver");
+        ArrayList<Intent> stickyIntents = null;
+        ProcessRecord callerApp = null;
+        int callingUid;
+        int callingPid;
+        synchronized(this) {
+            if (caller != null) {
+                callerApp = getRecordForAppLocked(caller);
+                if (callerApp == null) {
+                    throw new SecurityException(
+                            "Unable to find app for caller " + caller
+                            + " (pid=" + Binder.getCallingPid()
+                            + ") when registering receiver " + receiver);
+                }
+                if (callerApp.info.uid != Process.SYSTEM_UID &&
+                        !callerApp.pkgList.containsKey(callerPackage) &&
+                        !"android".equals(callerPackage)) {
+                    throw new SecurityException("Given caller package " + callerPackage
+                            + " is not running in process " + callerApp);
+                }
+                callingUid = callerApp.info.uid;
+                callingPid = callerApp.pid;
+            } else {
+                callerPackage = null;
+                callingUid = Binder.getCallingUid();
+                callingPid = Binder.getCallingPid();
+            }
+
+            userId = mUserController.handleIncomingUser(callingPid, callingUid, userId, true,
+                    ALLOW_FULL_ONLY, "registerReceiver", callerPackage);
+
+            Iterator<String> actions = filter.actionsIterator();
+            if (actions == null) {
+                ArrayList<String> noAction = new ArrayList<String>(1);
+                noAction.add(null);
+                actions = noAction.iterator();
+            }
+
+            // Collect stickies of users
+            int[] userIds = { UserHandle.USER_ALL, UserHandle.getUserId(callingUid) };
+            while (actions.hasNext()) {
+                String action = actions.next();
+                for (int id : userIds) {
+                    ArrayMap<String, ArrayList<Intent>> stickies = mStickyBroadcasts.get(id);
+                    if (stickies != null) {
+                        ArrayList<Intent> intents = stickies.get(action);
+                        if (intents != null) {
+                            if (stickyIntents == null) {
+                                stickyIntents = new ArrayList<Intent>();
+                            }
+                            stickyIntents.addAll(intents);
+                        }
+                    }
+                }
+            }
+        }
+
+        ArrayList<Intent> allSticky = null;
+        if (stickyIntents != null) {
+            final ContentResolver resolver = mContext.getContentResolver();
+            // Look for any matching sticky broadcasts...
+            for (int i = 0, N = stickyIntents.size(); i < N; i++) {
+                Intent intent = stickyIntents.get(i);
+                // If intent has scheme "content", it will need to acccess
+                // provider that needs to lock mProviderMap in ActivityThread
+                // and also it may need to wait application response, so we
+                // cannot lock ActivityManagerService here.
+                if (filter.match(resolver, intent, true, TAG) >= 0) {
+                    if (allSticky == null) {
+                        allSticky = new ArrayList<Intent>();
+                    }
+                    allSticky.add(intent);
+                }
+            }
+        }
+
+        // The first sticky in the list is returned directly back to the client.
+        Intent sticky = allSticky != null ? allSticky.get(0) : null;
+        if (DEBUG_BROADCAST) Slog.v(TAG_BROADCAST, "Register receiver " + filter + ": " + sticky);
+        if (receiver == null) {
+            return sticky;
+        }
+
+        synchronized (this) {
+            if (callerApp != null && (callerApp.thread == null
+                    || callerApp.thread.asBinder() != caller.asBinder())) {
+                // Original caller already died
+                return null;
+            }
+            ReceiverList rl = mRegisteredReceivers.get(receiver.asBinder());
+            if (rl == null) {
+                rl = new ReceiverList(this, callerApp, callingPid, callingUid,
+                        userId, receiver);
+                if (rl.app != null) {
+                    rl.app.receivers.add(rl);
+                } else {
+                    try {
+                        receiver.asBinder().linkToDeath(rl, 0);
+                    } catch (RemoteException e) {
+                        return sticky;
+                    }
+                    rl.linkedToDeath = true;
+                }
+                mRegisteredReceivers.put(receiver.asBinder(), rl);
+            } else if (rl.uid != callingUid) {
+                throw new IllegalArgumentException(
+                        "Receiver requested to register for uid " + callingUid
+                        + " was previously registered for uid " + rl.uid);
+            } else if (rl.pid != callingPid) {
+                throw new IllegalArgumentException(
+                        "Receiver requested to register for pid " + callingPid
+                        + " was previously registered for pid " + rl.pid);
+            } else if (rl.userId != userId) {
+                throw new IllegalArgumentException(
+                        "Receiver requested to register for user " + userId
+                        + " was previously registered for user " + rl.userId);
+            }
+            BroadcastFilter bf = new BroadcastFilter(filter, rl, callerPackage,
+                    permission, callingUid, userId);
+            rl.add(bf);
+            if (!bf.debugCheck()) {
+                Slog.w(TAG, "==> For Dynamic broadcast");
+            }
+            mReceiverResolver.addFilter(bf);
+
+            // Enqueue broadcasts for all existing stickies that match
+            // this filter.
+            if (allSticky != null) {
+                ArrayList receivers = new ArrayList();
+                receivers.add(bf);
+
+                final int stickyCount = allSticky.size();
+                for (int i = 0; i < stickyCount; i++) {
+                    Intent intent = allSticky.get(i);
+                    BroadcastQueue queue = broadcastQueueForIntent(intent);
+                    BroadcastRecord r = new BroadcastRecord(queue, intent, null,
+                            null, -1, -1, null, null, AppOpsManager.OP_NONE, null, receivers,
+                            null, 0, null, null, false, true, true, -1);
+                    queue.enqueueParallelBroadcastLocked(r);
+                    queue.scheduleBroadcastsLocked();
+                }
+            }
+
+            return sticky;
+        }
+    }
+
+    public void unregisterReceiver(IIntentReceiver receiver) {
+        if (DEBUG_BROADCAST) Slog.v(TAG_BROADCAST, "Unregister receiver: " + receiver);
+
+        final long origId = Binder.clearCallingIdentity();
+        try {
+            boolean doTrim = false;
+
+            synchronized(this) {
+                ReceiverList rl = mRegisteredReceivers.get(receiver.asBinder());
+                if (rl != null) {
+                    final BroadcastRecord r = rl.curBroadcast;
+                    if (r != null && r == r.queue.getMatchingOrderedReceiver(r)) {
+                        final boolean doNext = r.queue.finishReceiverLocked(
+                                r, r.resultCode, r.resultData, r.resultExtras,
+                                r.resultAbort, false);
+                        if (doNext) {
+                            doTrim = true;
+                            r.queue.processNextBroadcast(false);
+                        }
+                    }
+
+                    if (rl.app != null) {
+                        rl.app.receivers.remove(rl);
+                    }
+                    removeReceiverLocked(rl);
+                    if (rl.linkedToDeath) {
+                        rl.linkedToDeath = false;
+                        rl.receiver.asBinder().unlinkToDeath(rl, 0);
+                    }
+                }
+            }
+
+            // If we actually concluded any broadcasts, we might now be able
+            // to trim the recipients' apps from our working set
+            if (doTrim) {
+                trimApplications();
+                return;
+            }
+
+        } finally {
+            Binder.restoreCallingIdentity(origId);
+        }
+    }
+    ...
+    
+    public final int broadcastIntent(IApplicationThread caller,
+            Intent intent, String resolvedType, IIntentReceiver resultTo,
+            int resultCode, String resultData, Bundle resultExtras,
+            String[] requiredPermissions, int appOp, Bundle bOptions,
+            boolean serialized, boolean sticky, int userId) {
+        enforceNotIsolatedCaller("broadcastIntent");
+        synchronized(this) {
+            intent = verifyBroadcastLocked(intent);
+
+            final ProcessRecord callerApp = getRecordForAppLocked(caller);
+            final int callingPid = Binder.getCallingPid();
+            final int callingUid = Binder.getCallingUid();
+            final long origId = Binder.clearCallingIdentity();
+            int res = broadcastIntentLocked(callerApp,
+                    callerApp != null ? callerApp.info.packageName : null,
+                    intent, resolvedType, resultTo, resultCode, resultData, resultExtras,
+                    requiredPermissions, appOp, bOptions, serialized, sticky,
+                    callingPid, callingUid, userId);
+            Binder.restoreCallingIdentity(origId);
+            return res;
+        }
+    }
+    ...
+    
 ```
+
+**不管代码逻辑怎么变，他的传值都还是反射**
+
+```
+  ClassLoader cl =  mReceiver.getClass().getClassLoader();
+                    intent.setExtrasClassLoader(cl);
+                    intent.prepareToEnterProcess();
+                    setExtrasClassLoader(cl);
+                    receiver.setPendingResult(this);
+                    receiver.onReceive(mContext, intent);
+```
+
+
+## 三、ContentProvider
+
+ContentProvider这东西真的很少用，在我的工作中只遇到过一次，联系人信息没有存在sql中，而是以ContentProvider的形式向外部共享；
+
 
 
 问题2：
 
 startService和bindService
+
+Binder的数据流本质
+Android进程间数据共享的机制
+
+
+1、什么是IPC
+2、android中的IPC——Binder
+3、获取服务流程
+
+IPC(Interprocess Communication)进程间通信
+提供给程序员在不同进程之间的相互通信接口或技术
+每个进程拥有0x00000000到0xFFFFFFFF的4G虚拟内存空间
+由于进程的用户空间是相互独立的，不同进程不能相互访问，这是内核实现的保护机制
+
+UNIX中常见的IPC：
+信号、信道、信号量、消息队列、共享存储、UNIX或套接字
+
+信号：
+信号是软件中断。他的本意是提供一种处理异步事件的方法。不同进程间通过信号来通知对方发生了某个事件，信号是IPC。
+A进程直接向B进程发信号，B进程接收并处理信号
+例：在终端键入ctrl+c发出sigint信号，进程接受处理这个信号，默认为终止。
+
+管道：
+无名管道，有名管道(FIFO)
+管道的本质是读写“文件”，UNIX中万物都是文件。
+无名管道，只能作用有亲缘的进程通信(父子进程，兄弟进程)，由于是无名管道，文件其实是在内存中的。
+有名管道(FIFO)，也称为命名管道，可以在任意进程间通信，有实体的文件。
+管道文件内的数据无论是内存中的文件还是实体文件，在读取后都会被清除，再次填入新数据。
+常见的管道应用就是我们输入shell命令使用到的管道，例如：cat android.log|grep ViewRoot
+
+信号量：本质只是一个锁，不具备数据交换的能力
+消息队列：通信的双方通过再队列中存入消息和读取消息来进行通信
+共享存储：在内存中开辟一块可被共享的内存，进程间就可以调用相应的函数访问共享内存，在共享内存的地方交换信息进行通信。
+
+
+
+1.1 对象请求代理架构
+Android中展现给我们的是Activity、Service、BroadCast、ContentProvider四大组件，当不同进程中的组件进行数据交换时就需要进行间的通信，但从Android外的特性概念空间中，我们看不到进程的概念，而是Activity、Service、AIDL、INTENT。
+
+我们想要请求音频焦点，首先需要getSystemService(Activity.AUDIO_SERVICE)就能够得到一个AudioManager对象，通过这个AudioManager对象就可以操作系统音频相关，完全看不到Binder，所以在Android中，要完成某个操作，所需要做的就是请求某个有能力的服务对象去完成，而无需知道这个通讯是怎样工作的，以及服务在哪里，Android的这种设计本质是一种对象请求代理架构，只需要请求得到一个远程对象的代理，通过这个代理就可以和远程对象通信。
+
+
+1.2 Android的IPC原理
+每个Android的进程，只能运行在自己的进程所拥有的虚拟地址空间，对应4G的虚拟地址空间(32bit)，其中3G是用户空间，1G是内核空间，对于用户空间，不同进程之间彼此是不能共享的，而内核空间却是可以共享的，client进程向server进程通信，恰恰是利用进程间可共享的内核内存空间来完成底层通信工作的，client端与server端进程往往采用ioctl等方法跟内核空间驱动进行交互，而ioctl控制的就是Android中的Binder，Binder位于内核中，其本质只一个驱动设备9(/dev/binder)
+
+
+1.3 Binder原理
+Binder通信采用c/s架构，从组件视角来说，包含Client、Server、ServerManager以及binder驱动，架构图如下所示：
+Client：我们的应用(内部拥有一个BpBinder)
+Server：远程的服务(内部拥有一个BBinder)
+ServiceManager：位于Native(c++)，用于管理系统中的各种服务内部维护一个服务列表service list
+Binder驱动设备：位于内核中的Binder的本体，一个驱动设备
+toctl：用来控制IO设备的系统函数
+
+通中client/server/serviceManager之间的相互通信都是基于Binder机制，有主要的三大步骤：
+1、注册服务(addService)：server进程要先注册到ServiceManager，该过程：server是客户端，ServiceManager是服务端
+2、获取服务(getService):client进程使用某个Service前，需向ServiceManager中获取对应的Service，该过程client是客户端，ServiceManager是服务端。
+3、使用服务：Client根据得到的Service信息建立与Service所在Server进程通信的通路，然后可以直接与Service交互，该过程：client是客户端，server是服务端。
+
+client、server、ServiceManager之间不是直接交互的，而是都通过与内核空间中的Binder进行交互的，从而实现IPC通信方式。
+
+1.4 数据通信流程
+从一般意义来讲，Android设计者在Linux内核中设计了一个叫做Binder的设备文件，专门用来进行Android的数据交换，所有从数据流来看Java的VM空间进入到c++空间进行了一次转换，并有c++空间的函数将转化过的对象通过driver\binder设备传递到服务进程，从而完成进程间的IPC，这个过程可以用下图来表示。
+
+这里的数据流有几层转换过程
+(1)从JVM空间传到c++空间，这个是靠JNI使用ENV来完成对象的映射过程
+(2)从c++空间传入内核Binder设备，使用processState类完成工作
+(3)Service从内核中Binder设备读取数据
+
+其中BpBinder(客户端)和BBinder(服务端)都是Android中Binder通信相关的代表，他们都从IBinder类中派生而来，关系如图
+
+2.1获取代理对象
+IBinder b = ServiceManager.getService(Context.INPUT_METHOD_SERVICE);
+IInputMethodManager.Stub.asInterface(b);
+
+[-> IServiceManager.cpp]
+通过defaultServiceManager()得到BpServiceManager
+interface_cast<IServiceManager>(ProcessState::self()->getContextObject(NULL));
+1.ProcessState::self():
+用于获取ProcessState对象(单例模式)
+每个进程有且只有一个ProcessState对象，存在则直接返回，不存在则创建；
+2.ProcessState::getContextObject():
+用户获取BpBinder对象
+对于handle=0的BpBinder对象(与ServiceManager建立通信)
+存在则直接返回，不存在则创建
+3.interface_cast<IServiceManager>(BpBinder):
+用户获取BpServiceManagerd对象
+通过BpServiceManager::getService()来获取服务
+其中checkService()检索服务是否存在，当服务存在则直接返回相应服务，当服务不存在则休眠1s再继续检索服务，循环进行5次。checkService()中通过remote调用transact()方法来传递Service，remote()就是我们得到的BpBinder
+其最终在IPCThreadState中进行真正的transact工作。
+
+[->IPCThreadState.cpp]
+每个线程都有一个IPCThreadState，其中有一个mOut，成员变量MProcess保存了ProcessState变量(每个进程只有一个)
+mIn用来接收来自Binder设备的数据，默认大小256字节，mOut用来存储发往Binder设备的数据，默认大小为256字节。
+
+
+
+
+
+
 
 
 参考：
@@ -475,3 +924,7 @@ startService和bindService
 https://blog.csdn.net/u013085697/article/details/53898879
 
 https://blog.csdn.net/time_hunter/article/details/53107191
+
+《深入理解Android卷III》张大伟著
+
+https://v.qq.com/x/page/r0537eqpud6.html?spm=a2h7l.searchresults.soresults.dposter
