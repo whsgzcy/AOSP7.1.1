@@ -6,7 +6,11 @@
 * **1.3 ComponentCallbacks2**
 
 * **二、BroadcastReceiver**
-* **三、ContentProvider**
+
+* **三、Binder**
+* **3.1 什么是IPC**
+* **3.2 Android中的IPC Binder**
+* **3.3 获取服务流程**
 
 ## 一、Activity
 
@@ -808,114 +812,160 @@ services/core/java/com/android/server/am/ActivityManagerService.java
 ```
 
 
-## 三、ContentProvider
+## 三、Binder
 
-ContentProvider这东西真的很少用，在我的工作中只遇到过一次，联系人信息没有存在sql中，而是以ContentProvider的形式向外部共享；
-
-
-
-问题2：
-
-startService和bindService
-
-Binder的数据流本质
-Android进程间数据共享的机制
-
-
-1、什么是IPC
-2、android中的IPC——Binder
-3、获取服务流程
+### 3.1 什么是IPC
 
 IPC(Interprocess Communication)进程间通信
+
 提供给程序员在不同进程之间的相互通信接口或技术
+
 每个进程拥有0x00000000到0xFFFFFFFF的4G虚拟内存空间
+
 由于进程的用户空间是相互独立的，不同进程不能相互访问，这是内核实现的保护机制
+
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/1.png)
 
 UNIX中常见的IPC：
 信号、信道、信号量、消息队列、共享存储、UNIX或套接字
 
 信号：
 信号是软件中断。他的本意是提供一种处理异步事件的方法。不同进程间通过信号来通知对方发生了某个事件，信号是IPC。
+
 A进程直接向B进程发信号，B进程接收并处理信号
+
 例：在终端键入ctrl+c发出sigint信号，进程接受处理这个信号，默认为终止。
 
 管道：
 无名管道，有名管道(FIFO)
+
 管道的本质是读写“文件”，UNIX中万物都是文件。
+
 无名管道，只能作用有亲缘的进程通信(父子进程，兄弟进程)，由于是无名管道，文件其实是在内存中的。
+
 有名管道(FIFO)，也称为命名管道，可以在任意进程间通信，有实体的文件。
+
 管道文件内的数据无论是内存中的文件还是实体文件，在读取后都会被清除，再次填入新数据。
+
 常见的管道应用就是我们输入shell命令使用到的管道，例如：cat android.log|grep ViewRoot
 
 信号量：本质只是一个锁，不具备数据交换的能力
+
 消息队列：通信的双方通过再队列中存入消息和读取消息来进行通信
+
 共享存储：在内存中开辟一块可被共享的内存，进程间就可以调用相应的函数访问共享内存，在共享内存的地方交换信息进行通信。
 
 
+### 3.2 Android中的IPC Binder
 
-1.1 对象请求代理架构
-Android中展现给我们的是Activity、Service、BroadCast、ContentProvider四大组件，当不同进程中的组件进行数据交换时就需要进行间的通信，但从Android外的特性概念空间中，我们看不到进程的概念，而是Activity、Service、AIDL、INTENT。
+**对象请求代理架构**
 
-我们想要请求音频焦点，首先需要getSystemService(Activity.AUDIO_SERVICE)就能够得到一个AudioManager对象，通过这个AudioManager对象就可以操作系统音频相关，完全看不到Binder，所以在Android中，要完成某个操作，所需要做的就是请求某个有能力的服务对象去完成，而无需知道这个通讯是怎样工作的，以及服务在哪里，Android的这种设计本质是一种对象请求代理架构，只需要请求得到一个远程对象的代理，通过这个代理就可以和远程对象通信。
+Android中展现给我们的是**Activity、Service、BroadCast、ContentProvider**四大组件，当不同进程中的组件进行数据交换时就需要进行间的通信，但从Android外的特性概念空间中，我们看不到进程的概念，而是**Activity、Service、AIDL、INTENT**。
+
+我们想要请求音频焦点，首先需要**getSystemService(Activity.AUDIO_SERVICE)**就能够得到一个AudioManager对象，通过这个**AudioManager**对象就可以操作系统音频相关，完全看不到Binder，所以在Android中，要完成某个操作，所需要做的就是请求某个有能力的服务对象去完成，而无需知道这个通讯是怎样工作的，以及服务在哪里，Android的这种设计本质是一种对象请求代理架构，只需要请求得到一个远程对象的代理，通过这个代理就可以和远程对象通信。
+
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/2.png)
 
 
-1.2 Android的IPC原理
-每个Android的进程，只能运行在自己的进程所拥有的虚拟地址空间，对应4G的虚拟地址空间(32bit)，其中3G是用户空间，1G是内核空间，对于用户空间，不同进程之间彼此是不能共享的，而内核空间却是可以共享的，client进程向server进程通信，恰恰是利用进程间可共享的内核内存空间来完成底层通信工作的，client端与server端进程往往采用ioctl等方法跟内核空间驱动进行交互，而ioctl控制的就是Android中的Binder，Binder位于内核中，其本质只一个驱动设备9(/dev/binder)
+**Android的IPC原理**
 
+每个Android的进程，只能运行在自己的进程所拥有的虚拟地址空间，对应4G的虚拟地址空间(32bit)，其中3G是用户空间，1G是内核空间，对于用户空间，不同进程之间彼此是不能共享的，而内核空间却是可以共享的，client进程向server进程通信，恰恰是利用进程间可共享的内核内存空间来完成底层通信工作的，client端与server端进程往往采用ioctl等方法跟内核空间驱动进行交互，而ioctl控制的就是Android中的Binder，Binder位于内核中，其本质只一个**驱动设备(/dev/binder)**
 
-1.3 Binder原理
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/3.png)
+
+**Binder原理**
+
 Binder通信采用c/s架构，从组件视角来说，包含Client、Server、ServerManager以及binder驱动，架构图如下所示：
+
 Client：我们的应用(内部拥有一个BpBinder)
+
 Server：远程的服务(内部拥有一个BBinder)
+
 ServiceManager：位于Native(c++)，用于管理系统中的各种服务内部维护一个服务列表service list
+
 Binder驱动设备：位于内核中的Binder的本体，一个驱动设备
+
 toctl：用来控制IO设备的系统函数
 
-通中client/server/serviceManager之间的相互通信都是基于Binder机制，有主要的三大步骤：
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/4.png)
+
+图中client/server/serviceManager之间的相互通信都是基于Binder机制，有主要的三大步骤：
+
 1、注册服务(addService)：server进程要先注册到ServiceManager，该过程：server是客户端，ServiceManager是服务端
+
 2、获取服务(getService):client进程使用某个Service前，需向ServiceManager中获取对应的Service，该过程client是客户端，ServiceManager是服务端。
+
 3、使用服务：Client根据得到的Service信息建立与Service所在Server进程通信的通路，然后可以直接与Service交互，该过程：client是客户端，server是服务端。
 
 client、server、ServiceManager之间不是直接交互的，而是都通过与内核空间中的Binder进行交互的，从而实现IPC通信方式。
 
-1.4 数据通信流程
+**数据通信流程**
+
 从一般意义来讲，Android设计者在Linux内核中设计了一个叫做Binder的设备文件，专门用来进行Android的数据交换，所有从数据流来看Java的VM空间进入到c++空间进行了一次转换，并有c++空间的函数将转化过的对象通过driver\binder设备传递到服务进程，从而完成进程间的IPC，这个过程可以用下图来表示。
 
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/5.png)
+
 这里的数据流有几层转换过程
+
 (1)从JVM空间传到c++空间，这个是靠JNI使用ENV来完成对象的映射过程
+
 (2)从c++空间传入内核Binder设备，使用processState类完成工作
+
 (3)Service从内核中Binder设备读取数据
 
 其中BpBinder(客户端)和BBinder(服务端)都是Android中Binder通信相关的代表，他们都从IBinder类中派生而来，关系如图
 
-2.1获取代理对象
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/6.png)
+
+### 3.3 获取服务流程
+
+**获取代理对象**
+
 IBinder b = ServiceManager.getService(Context.INPUT_METHOD_SERVICE);
+
 IInputMethodManager.Stub.asInterface(b);
 
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/7.png)
+
 [-> IServiceManager.cpp]
+
 通过defaultServiceManager()得到BpServiceManager
+
 interface_cast<IServiceManager>(ProcessState::self()->getContextObject(NULL));
+
 1.ProcessState::self():
+
 用于获取ProcessState对象(单例模式)
+
 每个进程有且只有一个ProcessState对象，存在则直接返回，不存在则创建；
+
 2.ProcessState::getContextObject():
+
 用户获取BpBinder对象
+
 对于handle=0的BpBinder对象(与ServiceManager建立通信)
+
 存在则直接返回，不存在则创建
+
 3.interface_cast<IServiceManager>(BpBinder):
+
 用户获取BpServiceManagerd对象
+
 通过BpServiceManager::getService()来获取服务
+
 其中checkService()检索服务是否存在，当服务存在则直接返回相应服务，当服务不存在则休眠1s再继续检索服务，循环进行5次。checkService()中通过remote调用transact()方法来传递Service，remote()就是我们得到的BpBinder
+
 其最终在IPCThreadState中进行真正的transact工作。
 
 [->IPCThreadState.cpp]
+
 每个线程都有一个IPCThreadState，其中有一个mOut，成员变量MProcess保存了ProcessState变量(每个进程只有一个)
 mIn用来接收来自Binder设备的数据，默认大小256字节，mOut用来存储发往Binder设备的数据，默认大小为256字节。
 
 
+问题2：
 
-
-
+startService和bindService
 
 
 
