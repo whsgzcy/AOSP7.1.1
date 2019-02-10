@@ -12,6 +12,8 @@
 * **3.2 Android中的IPC Binder**
 * **3.3 获取服务流程**
 
+* **四、定制**
+
 ## 一、Activity
 
 ```
@@ -962,11 +964,70 @@ interface_cast<IServiceManager>(ProcessState::self()->getContextObject(NULL));
 每个线程都有一个IPCThreadState，其中有一个mOut，成员变量MProcess保存了ProcessState变量(每个进程只有一个)
 mIn用来接收来自Binder设备的数据，默认大小256字节，mOut用来存储发往Binder设备的数据，默认大小为256字节。
 
+## 四、定制
+
+我在APP这块的摸索，特定于行业软件，应用层已经无法满足我的需求了，大体有以下几点需求：
+
+1、无线网与以太网共用
+
+我们的平板以太网口连接底部工控机，.0网段，wifi连接我们路由器(后续的处理为，lora+以太口)
+
+![MacDown logo](https://github.com/whsgzcy/AOSP7.1.1/blob/master/images/8.png)
+
+这块是需要修改路由表
+
+http://blog.csdn.net/qq_32072451/article/details/73826030
+
+2、开机动画
+
+略
+
+3、usb请求权限，弹出系统弹框等，权限一律默认为true
+
+7.1源码
+
+```
+core\java\com\android\server\pm\PackageManagerService.java
+
+doHandleMessage()下的case POST_INSTALL下
+
+把final boolean grantPermissions = (args.installFlags& PackageManager.INSTALL_GRANT_RUNTIME_PERMISSIONS) != 0;
+
+改为final boolean grantPermissions = true;即可
+```
+
+4、launcher起来之后，3s之后，发送指定广播，去起我们的业务应用
+
+在前面一些列都起来之后，在launcher起来之后，3s之后发送自定义广播，建议从File文件中读取，这样动态的定制自己的第一启动应用
+
+5、业务应用占屏期间，隐藏并禁用导航栏、状态栏，禁止下拉操作
+
+```
+packages/SystemUI//src/com/android/systemui/statusbar/phone/PhoneStatusBar.Java
+```
+
+通过在PhoneStatusBar.java类中注册一个广播的方式来实现状态栏的禁用和解除，其核心方法就是调用了disable()方法。disable()是SystemUI自定义的方法
+
+6、将默认的tts替换为讯飞语记.apk
+
+略
+
+7、应用出现crash，提前捕获，需要释放usb转serial这块的资源，重启应用
+
+有时候我们在Main.xml中设置 识别usb设备后直接启动应用这一操作，如果上一次在捕获异常前让应用重启没有去close这块的资源，那么就会卡在那一步的页面，长时间之后会出现ANR问题
+
+8、长时间屏幕保持高亮，屏幕会过热，需要对PowerManager进行处理，指定时间段或者是一定规则下，屏幕休眠
+
+PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+...
 
 问题2：
 
 startService和bindService
 
+在ActivityStack cleanUpActivityServicesLocked方法中找到了答案，在activity结束之前会遍历，看是否还是ConnectionRecord，如果有，就结束它，也就解释了为什么bindService生命周期与调用者同步
+
+归根结底，还是对数据结构的操作，利用标记的构建我们的业务；
 
 
 参考：
@@ -978,3 +1039,7 @@ https://blog.csdn.net/time_hunter/article/details/53107191
 《深入理解Android卷III》张大伟著
 
 https://v.qq.com/x/page/r0537eqpud6.html?spm=a2h7l.searchresults.soresults.dposter
+
+https://blog.csdn.net/u010164190/article/details/51198352
+
+https://blog.csdn.net/jasonwang18/article/details/55017985
